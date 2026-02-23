@@ -97,6 +97,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     private func handle(url: URL) {
+        if isOAuthCallback(url: url) {
+            NotificationCenter.default.post(name: .gitOAuthCallback, object: nil, userInfo: ["url": url])
+            return
+        }
+
         let vc = UIApplication.getVC()
         let storage = Storage.shared()
         var note = storage.getBy(url: url)
@@ -142,6 +147,16 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 print("Note opening error: \(error)")
             }
         }
+    }
+
+    private func isOAuthCallback(url: URL) -> Bool {
+        guard url.scheme == "fsnotes" else { return false }
+
+        if url.host == "oauth", url.path == "/callback" {
+            return true
+        }
+
+        return false
     }
 
     // MARK: - State Restoration

@@ -806,13 +806,103 @@ extension ViewController: UIDocumentPickerDelegate {
     }
 
     private func openGitSettings(selectedProject: Project?) {
-        guard let selectedProject = selectedProject else { return }
+        let vaults = Storage.shared()
+            .getSidebarProjects()
+            .filter { !$0.isVirtual && !$0.isTrash && ($0.isBookmark || $0.parent?.isDefault == true) }
+            .sorted(by: { $0.label.lowercased() < $1.label.lowercased() })
 
-        let projectController = AppDelegate.getGitVC(for: selectedProject)
+        guard !vaults.isEmpty else {
+            self.dismiss(animated: true) {
+                let alertController = UIAlertController(
+                    title: "No vault",
+                    message: "Please create or add a folder first",
+                    preferredStyle: .alert
+                )
+                alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
+                UIApplication.getVC().present(alertController, animated: true)
+            }
+            return
+        }
+
+        let preferredVault = selectedProject?.getParent()
+        let picker = GitVaultPickerViewController(
+            vaults: vaults,
+            preferredVault: preferredVault,
+            onSelect: { vault in
+                self.presentGitSettings(for: vault)
+            },
+            onImportFromGitHub: { repositoryURL, vaultName in
+                self.importVaultFromGitHub(repositoryURL: repositoryURL, preferredName: vaultName)
+            }
+        )
+
+        let pickerNav = UINavigationController(rootViewController: picker)
+        self.dismiss(animated: true, completion: {
+            UIApplication.getVC().present(pickerNav, animated: true, completion: nil)
+        })
+    }
+
+    private func presentGitSettings(for vault: Project, initialOrigin: String? = nil, autoRun: Bool = false) {
+        let projectController = AppDelegate.getGitVC(for: vault)
+        projectController.setProject(vault)
+        if let initialOrigin = initialOrigin {
+            projectController.configureInitialGitOrigin(initialOrigin, autoRun: autoRun)
+        }
         let controller = UINavigationController(rootViewController: projectController)
-
-        self.dismiss(animated: true, completion: nil)
         UIApplication.getVC().present(controller, animated: true, completion: nil)
+    }
+
+    private func importVaultFromGitHub(repositoryURL: String, preferredName: String?) {
+        let trimmedRepo = repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoURL = URL(string: trimmedRepo),
+              let scheme = repoURL.scheme?.lowercased(),
+              (scheme == "https" || scheme == "http") else {
+            let alertController = UIAlertController(
+                title: "Invalid URL",
+                message: "Please enter a valid repository URL",
+                preferredStyle: .alert
+            )
+            alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
+            UIApplication.getVC().present(alertController, animated: true)
+            return
+        }
+
+        guard let root = storage.getDefault() else { return }
+
+        let derived = repoURL.deletingPathExtension().lastPathComponent
+        let rawName = preferredName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = (rawName?.isEmpty == false ? rawName! : derived)
+        let safeName = baseName.replacingOccurrences(of: "/", with: "-")
+        guard !safeName.isEmpty else { return }
+
+        let vaultURL = root.url.appendingPathComponent(safeName, isDirectory: true)
+
+        if !FileManager.default.fileExists(atPath: vaultURL.path) {
+            do {
+                try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true, attributes: nil)
+            } catch {
+                let alertController = UIAlertController(
+                    title: "Create vault failed",
+                    message: error.localizedDescription,
+                    preferredStyle: .alert
+                )
+                alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
+                UIApplication.getVC().present(alertController, animated: true)
+                return
+            }
+        }
+
+        var vaultProject = storage.getProjectBy(url: vaultURL)
+        if vaultProject == nil, let projects = storage.insert(url: vaultURL), let created = projects.first {
+            vaultProject = created
+            UIApplication.getVC().sidebarTableView.insertRows(projects: projects)
+        }
+
+        guard let vault = vaultProject else { return }
+        vault.settings.setOrigin(trimmedRepo)
+        vault.saveSettings()
+
+        presentGitSettings(for: vault, initialOrigin: trimmedRepo, autoRun: true)
     }
 
     private func emptyBin() {
@@ -954,5 +1044,129 @@ extension ViewController: UIDocumentPickerDelegate {
         alertController.addAction(okAction)
 
         self.present(alertController, animated: true, completion: nil)
+    }
+}
+
+private final class GitVaultPickerViewController: UITableViewController {
+    private let vaults: [Project]
+    private let preferredVault: Project?
+    private let onSelect: (Project) -> Void
+    private let onImportFromGitHub: (String, String?) -> Void
+
+    init(
+        vaults: [Project],
+        preferredVault: Project?,
+        onSelect: @escaping (Project) -> Void,
+        onImportFromGitHub: @escaping (String, String?) -> Void
+    ) {
+        self.vaults = vaults
+        self.preferredVault = preferredVault
+        self.onSelect = onSelect
+        self.onImportFromGitHub = onImportFromGitHub
+        super.init(style: .insetGrouped)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Choose Vault"
+        navigationItem.largeTitleDisplayMode = .never
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "VaultCell")
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .cancel,
+            target: self,
+            action: #selector(close)
+        )
+    }
+
+    @objc private func close() {
+        dismiss(animated: true, completion: nil)
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        if section == 0 {
+            return 1
+        }
+        return vaults.count
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        return 2
+    }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        if section == 0 {
+            return "Start"
+        }
+        return "Existing vaults"
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "VaultCell", for: indexPath)
+        cell.accessoryType = .none
+
+        if indexPath.section == 0 {
+            var content = cell.defaultContentConfiguration()
+            content.text = "From GitHub"
+            content.secondaryText = "Create vault and clone repository"
+            content.image = UIImage(systemName: "arrow.down.doc")
+            cell.contentConfiguration = content
+            cell.accessoryType = .disclosureIndicator
+            return cell
+        }
+
+        guard vaults.indices.contains(indexPath.row) else { return cell }
+        let vault = vaults[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = vault.label
+        content.secondaryText = nil
+        content.image = UIImage(systemName: "folder")
+        cell.contentConfiguration = content
+        cell.accessoryType = vault == preferredVault ? .checkmark : .none
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+
+        if indexPath.section == 0 {
+            let alertController = UIAlertController(
+                title: "From GitHub",
+                message: "Paste repository URL and set a vault name",
+                preferredStyle: .alert
+            )
+            alertController.addTextField { textField in
+                textField.placeholder = "https://github.com/user/repo.git"
+                textField.keyboardType = .URL
+                textField.autocapitalizationType = .none
+                textField.autocorrectionType = .no
+            }
+            alertController.addTextField { textField in
+                textField.placeholder = "Vault name (optional)"
+                textField.text = nil
+            }
+
+            alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alertController.addAction(UIAlertAction(title: "Continue", style: .default, handler: { _ in
+                let repo = alertController.textFields?[0].text ?? ""
+                let vaultName = alertController.textFields?[1].text
+                self.dismiss(animated: true) {
+                    self.onImportFromGitHub(repo, vaultName)
+                }
+            }))
+
+            present(alertController, animated: true)
+            return
+        }
+
+        guard vaults.indices.contains(indexPath.row) else { return }
+
+        let vault = vaults[indexPath.row]
+        dismiss(animated: true) {
+            self.onSelect(vault)
+        }
     }
 }

@@ -19,6 +19,7 @@ class SidebarTableView: UITableView,
     public var sidebar = Sidebar()
     private var busyTrashReloading = false
     public var viewController: ViewController?
+    private var isReloadingSidebar = false
 
     func numberOfSections(in tableView: UITableView) -> Int {
         return sidebar.items.count
@@ -73,7 +74,9 @@ class SidebarTableView: UITableView,
     func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
         selectRow(at: indexPath, animated: false, scrollPosition: .none)
 
+        isReloadingSidebar = true
         self.tableView(tableView, didSelectRowAt: indexPath)
+        isReloadingSidebar = false
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
@@ -83,6 +86,16 @@ class SidebarTableView: UITableView,
         guard sidebar.items.indices.contains(indexPath.section) && sidebar.items[indexPath.section].indices.contains(indexPath.row) else { return }
 
         let sidebarItem = sidebar.items[indexPath.section][indexPath.row]
+
+        // Push FolderViewController for real user taps on project items
+        if !isReloadingSidebar,
+           !sidebarItem.isSystem(),
+           sidebarItem.type != .Tag,
+           let project = sidebarItem.project, !project.isVirtual {
+            let folderVC = FolderViewController(project: project)
+            vc.navigationController?.pushViewController(folderVC, animated: true)
+            return
+        }
 
         guard vc.storage.searchQuery.projects.first != sidebarItem.project
             || sidebarItem.type == .Tag else { return }
@@ -130,6 +143,7 @@ class SidebarTableView: UITableView,
             UserDefaultsManagement.lastProjectURL = project.url
         }
 
+        // System items (All, Inbox, Todo, Trash, Tags): keep original in-place filtering
         vc.buildSearchQuery()
         vc.reloadNotesTable() {
             DispatchQueue.main.async {
@@ -722,8 +736,10 @@ class SidebarTableView: UITableView,
             indexPath = IndexPath(row: rowId, section: 0)
         }
 
+        isReloadingSidebar = true
         tableView(self, didSelectRowAt: indexPath)
-        
+        isReloadingSidebar = false
+
         viewController?.resizeSidebar(withAnimation: true)
     }
 

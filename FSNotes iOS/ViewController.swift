@@ -42,7 +42,7 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
 
     private var delayedInsert: Note?
 
-    private var maxSidebarWidth = CGFloat(0)
+    var maxSidebarWidth = CGFloat(0)
     private var accessTime = DispatchTime.now()
 
     public var isActiveTableUpdating = false
@@ -83,6 +83,11 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
 
         super.viewWillAppear(animated)
         navigationItem.searchController = nil
+
+        // Close sidebar when returning from FolderViewController
+        if UserDefaultsManagement.sidebarIsOpened {
+            hideSidebar()
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -279,16 +284,16 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
     }
 
     public func configureNotifications() {
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(ubiquitousKeyValueStoreDidChange(_:)),
-            name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-            object: NSUbiquitousKeyValueStore.default)
+        #if !targetEnvironment(simulator)
+        if FileManager.default.ubiquityIdentityToken != nil {
+            NotificationCenter.default.addObserver(self,
+                selector: #selector(ubiquitousKeyValueStoreDidChange(_:)),
+                name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                object: NSUbiquitousKeyValueStore.default)
 
-        if NSUbiquitousKeyValueStore.default.synchronize() == false {
-            fatalError("This app was not built with the proper entitlement requests.")
+            NSUbiquitousKeyValueStore.default.synchronize()
         }
-        
-        NSUbiquitousKeyValueStore.default.synchronize()
+        #endif
 
         NotificationCenter.default.addObserver(self, selector: #selector(preferredContentSizeChanged), name: UIContentSizeCategory.didChangeNotification, object: nil)
 
@@ -413,11 +418,28 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
     }
 
     @IBAction public func openSidebar() {
-        if UserDefaultsManagement.sidebarIsOpened {
-            hideSidebar()
-        } else {
-            showSidebar()
+        navigationController?.interactivePopGestureRecognizer?.delegate = nil
+        UserDefaultsManagement.sidebarIsOpened = false
+        hideSidebar()
+
+        if let project = storage.searchQuery.projects.first,
+           !project.isVirtual,
+           !project.isTrash {
+            let folderVC = FolderViewController(project: project)
+            navigationController?.pushViewController(folderVC, animated: true)
+            return
         }
+
+        if let project = UIApplication.getEVC().note?.project,
+           !project.isVirtual,
+           !project.isTrash {
+            let folderVC = FolderViewController(project: project)
+            navigationController?.pushViewController(folderVC, animated: true)
+            return
+        }
+
+        let foldersVC = FoldersRootViewController()
+        navigationController?.pushViewController(foldersVC, animated: true)
     }
 
     @IBAction public func notesLongPress(gesture: UILongPressGestureRecognizer) {
@@ -647,12 +669,8 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if let recognizer = gestureRecognizer as? UIPanGestureRecognizer {
-            if recognizer.translation(in: self.view).x > 0 && !UserDefaultsManagement.sidebarIsOpened
-                || recognizer.translation(in: self.view).x < 0 &&
-                UserDefaultsManagement.sidebarIsOpened {
-                return true
-            }
+        if gestureRecognizer is UIPanGestureRecognizer {
+            return false
         }
         return false
     }
@@ -1122,43 +1140,7 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
     }
 
     @objc func handleSidebarSwipe(_ swipe: UIPanGestureRecognizer) {
-        let notchWidth = getLeftInset()
-        let translation = swipe.translation(in: notesTable)
-
-        if swipe.state == .began {
-            sidebarTableView.isUserInteractionEnabled = true
-            initSidebar()
-            return
-        }
-
-        if swipe.state == .changed {
-            guard
-                UserDefaultsManagement.sidebarIsOpened && translation.x + notchWidth < 0 && (translation.x + notchWidth + maxSidebarWidth) > 0
-                || !UserDefaultsManagement.sidebarIsOpened && translation.x + notchWidth > 0 && translation.x + notchWidth < maxSidebarWidth
-            else { return }
-
-            UIView.animate(withDuration: 0.075, delay: 0.0, options: .beginFromCurrentState, animations: {
-                if translation.x + notchWidth > 0 {
-                    self.notesTableLeadingConstraint.constant = translation.x
-                    self.sidebarTableLeadingConstraint.constant = -self.maxSidebarWidth/2 + translation.x/2
-                } else {
-                    self.notesTableLeadingConstraint.constant = self.maxSidebarWidth + translation.x
-                    self.sidebarTableLeadingConstraint.constant = translation.x/2
-                }
-                self.view.layoutIfNeeded()
-            })
-            return
-        }
-
-        if swipe.state == .ended {
-            if translation.x > 0 {
-                showSidebar()
-            }
-
-            if translation.x < 0 {
-                hideSidebar()
-            }
-        }
+        return
     }
 
     private func initSidebar() {

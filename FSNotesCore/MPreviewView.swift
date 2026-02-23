@@ -629,9 +629,18 @@ class MPreviewView: WKWebView, WKUIDelegate, WKNavigationDelegate {
         if let unwrapped = note?.getTitle() {
             title = unwrapped
         }
-        
+
+        var fileNameHeader = String()
+        if let fileName = note?.getFileName(), !fileName.isEmpty {
+            let escaped = fileName
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            fileNameHeader = "<h1 style=\"margin-bottom:0.5em;\">\(escaped)</h1><hr>"
+        }
+
         let inlineCss = MPreviewView.getPreviewStyle(print: print, forceLightTheme: isWeb)
-        
+
         template = template
             .replacingOccurrences(of: "{TITLE}", with: title)
             .replacingOccurrences(of: "{INLINE_CSS}", with: inlineCss)
@@ -639,7 +648,7 @@ class MPreviewView: WKWebView, WKUIDelegate, WKNavigationDelegate {
             .replacingOccurrences(of: "{FSNOTES_APPEARANCE}", with: appearance)
             .replacingOccurrences(of: "{FSNOTES_PLATFORM}", with: platform)
             .replacingOccurrences(of: "{FSNOTES_PREVIEW}", with: preview)
-            .replacingOccurrences(of: "{NOTE_BODY}", with: htmlString)
+            .replacingOccurrences(of: "{NOTE_BODY}", with: fileNameHeader + htmlString)
             .replacingOccurrences(of: "{WEB_PATH}", with: webPath)
         
         return template

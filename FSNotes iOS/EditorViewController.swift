@@ -37,6 +37,17 @@ class EditorViewController: UIViewController,
 
     @IBOutlet weak var editArea: EditTextView!
 
+    private lazy var fileNameField: UITextField = {
+        let field = UITextField()
+        field.font = UIFont.boldSystemFont(ofSize: 28)
+        field.textColor = UIColor.black
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.returnKeyType = .done
+        field.addTarget(self, action: #selector(fileNameFieldDidEnd), for: .editingDidEndOnExit)
+        field.addTarget(self, action: #selector(fileNameFieldDidEnd), for: .editingDidEnd)
+        return field
+    }()
+
     var rowUpdaterTimer = Timer()
 
     public var tagsTimer: Timer?
@@ -58,7 +69,16 @@ class EditorViewController: UIViewController,
         storageQueue.maxConcurrentOperationCount = 1
         storageQueue.qualityOfService = .userInitiated
 
-        editArea.textContainerInset = UIEdgeInsets(top: 13, left: 10, bottom: 0, right: 10)
+        editArea.textContainerInset = UIEdgeInsets(top: 50, left: 10, bottom: 0, right: 10)
+
+        fileNameField.backgroundColor = .clear
+        editArea.addSubview(fileNameField)
+        NSLayoutConstraint.activate([
+            fileNameField.topAnchor.constraint(equalTo: editArea.topAnchor, constant: 8),
+            fileNameField.leadingAnchor.constraint(equalTo: editArea.frameLayoutGuide.leadingAnchor, constant: 15),
+            fileNameField.trailingAnchor.constraint(equalTo: editArea.frameLayoutGuide.trailingAnchor, constant: -15),
+            fileNameField.heightAnchor.constraint(equalToConstant: 38)
+        ])
 
         let imageTap = SingleImageTouchDownGestureRecognizer(target: self, action: #selector(imageTapHandler(_:)))
         editArea.addGestureRecognizer(imageTap)
@@ -204,15 +224,18 @@ class EditorViewController: UIViewController,
         if !note.isLoaded {
             note.load()
         }
-        
+
+        fileNameField.text = note.getFileName()
         editArea.note = note
 
         if note.previewState {
+            fileNameField.isHidden = true
             loadPreviewView()
             completion?()
             return
         }
 
+        fileNameField.isHidden = false
         getPreviewView()?.removeFromSuperview()
         fillEditor(note: note, selectedRange: selectedRange)
         completion?()
@@ -253,6 +276,17 @@ class EditorViewController: UIViewController,
                 self.openSearchWithText(query)
             }
         }
+    }
+
+    @objc private func fileNameFieldDidEnd() {
+        guard let note = self.note,
+              let newName = fileNameField.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !newName.isEmpty,
+              newName != note.getFileName()
+        else { return }
+
+        note.rename(to: newName)
+        UIApplication.getVC().notesTable.reloadData()
     }
 
     @objc public func clickOnButton() {

@@ -20,6 +20,10 @@ public class ProjectSettings: NSObject, NSSecureCoding {
     public var priority: Int = 0
     public var gitAutoPull: Bool = false
     public var gitOrigin: String?
+    public var gitAuthMode: String?
+    public var gitOAuthProvider: String?
+    public var gitOAuthAccessToken: String?
+    public var gitOAuthUsername: String?
     public var gitPrivateKey: Data?
     public var gitPublicKey: Data?
     public var gitPrivateKeyPassphrase: String?
@@ -50,6 +54,22 @@ public class ProjectSettings: NSObject, NSSecureCoding {
 
         if let value = aDecoder.decodeObject(of: NSString.self, forKey: "gitOrigin") as? String {
             gitOrigin = value
+        }
+
+        if let value = aDecoder.decodeObject(of: NSString.self, forKey: "gitAuthMode") as? String {
+            gitAuthMode = value
+        }
+
+        if let value = aDecoder.decodeObject(of: NSString.self, forKey: "gitOAuthProvider") as? String {
+            gitOAuthProvider = value
+        }
+
+        if let value = aDecoder.decodeObject(of: NSString.self, forKey: "gitOAuthAccessToken") as? String {
+            gitOAuthAccessToken = value
+        }
+
+        if let value = aDecoder.decodeObject(of: NSString.self, forKey: "gitOAuthUsername") as? String {
+            gitOAuthUsername = value
         }
 
         if let value = aDecoder.decodeObject(of: NSData.self, forKey: "gitPrivateKey") as? Data {
@@ -89,6 +109,22 @@ public class ProjectSettings: NSObject, NSSecureCoding {
 
         if let gitOrigin = gitOrigin {
             aCoder.encode(gitOrigin, forKey: "gitOrigin")
+        }
+
+        if let gitAuthMode = gitAuthMode {
+            aCoder.encode(gitAuthMode, forKey: "gitAuthMode")
+        }
+
+        if let gitOAuthProvider = gitOAuthProvider {
+            aCoder.encode(gitOAuthProvider, forKey: "gitOAuthProvider")
+        }
+
+        if let gitOAuthAccessToken = gitOAuthAccessToken {
+            aCoder.encode(gitOAuthAccessToken, forKey: "gitOAuthAccessToken")
+        }
+
+        if let gitOAuthUsername = gitOAuthUsername {
+            aCoder.encode(gitOAuthUsername, forKey: "gitOAuthUsername")
         }
         
         if let gitPrivateKey = gitPrivateKey {

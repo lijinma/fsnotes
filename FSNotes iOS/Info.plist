@@ -118,6 +118,12 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>GitHubOAuthBackendTokenURL</key>
+	<string>https://oauth.lijinma.com/oauth_github_token.php</string>
+	<key>GitHubOAuthClientID</key>
+	<string>Ov23lidxgKkwwJQnwxZk</string>
+	<key>GitHubOAuthRedirectURI</key>
+	<string>fsnotes://oauth/callback</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSRequiresIPhoneOS</key>

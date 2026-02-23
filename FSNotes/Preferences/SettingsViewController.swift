@@ -48,15 +48,6 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
     @IBAction func clonePull(_ sender: Any) {
         guard let project = self.gitProject else { return }
 
-        if let origin = project.settings.gitOrigin, origin.startsWith(string: "https://") {
-            let alert = NSAlert()
-            alert.messageText = "Wrong configuration"
-            alert.alertStyle = .critical
-            alert.informativeText = "Please use ssh keys, https auth is not supported"
-            alert.runModal()
-            return
-        }
-
         let action = project.getRepositoryState()
         updateButtons(isActive: true)
 

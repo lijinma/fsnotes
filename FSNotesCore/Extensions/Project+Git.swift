@@ -8,7 +8,33 @@
 
 import Foundation
 
+private class StaticPasswordDelegate: PasswordDelegate {
+    private let username: String
+    private let password: String
+
+    init(username: String, password: String) {
+        self.username = username
+        self.password = password
+    }
+
+    func get(username: String?, url: URL?) -> PasswordData {
+        return RawPasswordData(username: self.username, password: self.password)
+    }
+}
+
 extension Project {
+    private var oauthKeychainAccount: String {
+        return "GitOAuth-\(settingsKey)"
+    }
+
+    private var oauthKeychainItem: KeychainPasswordItem {
+        return KeychainPasswordItem(
+            service: "\(KeychainConfiguration.serviceName).GitOAuth",
+            account: oauthKeychainAccount,
+            accessGroup: KeychainConfiguration.accessGroup
+        )
+    }
+
     public func getGitOrigin() -> String? {
         if let origin = settings.gitOrigin, origin.count > 0 {
             return origin
@@ -138,7 +164,13 @@ extension Project {
         return false
     }
 
-    public func getAuthHandler() -> SshKeyHandler? {
+    public func getAuthHandler() -> AuthenticationHandler? {
+        let mayUseOAuth = settings.gitAuthMode == "oauth" || (settings.gitAuthMode == nil && settings.gitPrivateKey == nil)
+        if mayUseOAuth, let token = getGitOAuthToken(), !token.isEmpty {
+            let username = settings.gitOAuthUsername ?? "x-access-token"
+            return PasswordHandler(passwordDelegate: StaticPasswordDelegate(username: username, password: token))
+        }
+
         var rsa: URL?
 
         if let rsaURL = installSSHKey() {
@@ -318,6 +350,54 @@ extension Project {
         }
 
         return false
+    }
+
+    public func getGitOAuthToken() -> String? {
+        if let token = settings.gitOAuthAccessToken, !token.isEmpty {
+            try? oauthKeychainItem.savePassword(token)
+            return token
+        }
+
+        if let token = try? oauthKeychainItem.readPassword(), !token.isEmpty {
+            settings.gitOAuthAccessToken = token
+            if settings.gitAuthMode == nil {
+                settings.gitAuthMode = "oauth"
+            }
+            if settings.gitOAuthProvider == nil {
+                settings.gitOAuthProvider = "github"
+            }
+            if settings.gitOAuthUsername == nil {
+                settings.gitOAuthUsername = "x-access-token"
+            }
+            saveSettings()
+            return token
+        }
+
+        return nil
+    }
+
+    public func setGitOAuthToken(_ token: String, provider: String = "github", username: String = "x-access-token") {
+        settings.gitAuthMode = "oauth"
+        settings.gitOAuthProvider = provider
+        settings.gitOAuthAccessToken = token
+        settings.gitOAuthUsername = username
+
+        try? oauthKeychainItem.savePassword(token)
+        saveSettings()
+    }
+
+    public func clearGitOAuthToken() {
+        settings.gitOAuthAccessToken = nil
+        settings.gitOAuthProvider = nil
+        settings.gitOAuthUsername = nil
+        settings.gitAuthMode = nil
+
+        try? oauthKeychainItem.deleteItem()
+        saveSettings()
+    }
+
+    public func isGitOAuthAuthorized() -> Bool {
+        return getGitOAuthToken() != nil
     }
 
     public func removeRepository(progress: GitProgress? = nil) {

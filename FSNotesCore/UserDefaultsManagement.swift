@@ -1008,7 +1008,7 @@ public class UserDefaultsManagement {
                 return result
             }
 
-            return true
+            return false
         }
         set {
             shared?.set(newValue, forKey: Constants.FirstLineAsTitle)

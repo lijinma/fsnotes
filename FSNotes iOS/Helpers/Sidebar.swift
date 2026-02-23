@@ -118,10 +118,9 @@ class Sidebar {
         // System - section 0
         items.append(system)
 
-        // Projects - section 1
+        // Projects - section 1 (top-level only; children shown via FolderViewController)
         let projects = storage
-            .getAvailableProjects()
-            .sorted(by: { $0.label < $1.label })
+            .getSidebarProjects()
             .map({
                 SidebarItem(
                     name: $0.label,
