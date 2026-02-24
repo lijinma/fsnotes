@@ -44,18 +44,31 @@ class SandboxBookmark {
                     print(error)
                 }
             }
+
+            // Single-vault mode: keep only one bookmark.
+            if self.bookmarks.count > 1 {
+                if let first = self.bookmarks.sorted(by: { $0.key.path < $1.key.path }).first {
+                    self.bookmarks = [first.key: first.value]
+                    save(data: [first.value])
+                }
+            }
         }
     }
 
     public func save(data: Data) {
-        var bookmarks = [Data]()
-
-        if let bookmarksData = defaults?.object(forKey: bookmarksKey) as? [Data] {
-            bookmarks = bookmarksData
+        do {
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: data, bookmarkDataIsStale: &isStale)
+            if !isStale {
+                self.bookmarks.removeAll()
+                self.bookmarks[url.standardized] = data
+            }
+        } catch {
+            print(error)
         }
 
-        bookmarks.append(data)
-        save(data: bookmarks)
+        // Single-vault mode: overwrite previous bookmarks.
+        save(data: [data])
     }
 
     public func save(data: [Data]) {

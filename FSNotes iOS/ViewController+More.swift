@@ -587,7 +587,18 @@ extension ViewController: UIDocumentPickerDelegate {
         guard var selectedProject = selectedProject else { return }
 
         if selectedProject.isVirtual {
-            selectedProject = self.storage.getDefault()!
+            guard let vault = self.storage.getSidebarProjects().first else {
+                let alertController = UIAlertController(
+                    title: "Vault required",
+                    message: "Please choose a vault folder first.",
+                    preferredStyle: .alert
+                )
+                alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
+                UIApplication.getVC().present(alertController, animated: true)
+                return
+            }
+
+            selectedProject = vault
         }
 
         let mvc = UIApplication.getVC()
@@ -813,7 +824,7 @@ extension ViewController: UIDocumentPickerDelegate {
     private func openGitSettings(selectedProject: Project?, requiredSelection: Bool = false) {
         let vaults = Storage.shared()
             .getSidebarProjects()
-            .filter { !$0.isVirtual && !$0.isTrash && ($0.isBookmark || $0.parent?.isDefault == true) }
+            .filter { !$0.isVirtual && !$0.isTrash && $0.isBookmark }
             .sorted(by: { $0.label.lowercased() < $1.label.lowercased() })
 
         let preferredVault = selectedProject
@@ -869,8 +880,7 @@ extension ViewController: UIDocumentPickerDelegate {
         if vaultProject == nil, let projects = storage.insert(url: url, bookmark: true), let created = projects.first {
             vaultProject = created
             storage.loadProjectRelations()
-            UIApplication.getVC().sidebarTableView.insertRows(projects: projects)
-            UIApplication.getVC().sidebarTableView.reloadData()
+            UIApplication.getVC().sidebarTableView.reloadSidebar()
             UIApplication.getVC().reloadNotesTable()
         }
 

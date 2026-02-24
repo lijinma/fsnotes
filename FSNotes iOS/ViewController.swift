@@ -979,7 +979,7 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
     private func hasGitVaults() -> Bool {
         let vaults = storage
             .getSidebarProjects()
-            .filter { !$0.isVirtual && !$0.isTrash && ($0.isBookmark || $0.parent?.isDefault == true) }
+            .filter { !$0.isVirtual && !$0.isTrash && $0.isBookmark }
         return !vaults.isEmpty
     }
 
@@ -1014,9 +1014,16 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
 
     public func createNote(content: String? = nil, pasteboard: Bool = false) {
         var currentProject: Project
-        if let project = storage.getProjects().first {
+        if let project = storage.getSidebarProjects().first {
             currentProject = project
         } else {
+            let alert = UIAlertController(
+                title: "Vault required",
+                message: "Please choose a vault folder first.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+            present(alert, animated: true)
             return
         }
 

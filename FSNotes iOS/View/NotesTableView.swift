@@ -870,13 +870,7 @@ class NotesTableView: UITableView,
             do {
                 try project.saveRevision()
                 DispatchQueue.main.async {
-                    let message: String
-                    if project.getGitOrigin() != nil {
-                        message = "Add, commit, and push completed."
-                    } else {
-                        message = "Commit completed (no remote origin configured)."
-                    }
-                    self.presentGitAlert(title: "Git sync complete", message: message)
+                    self.presentGitAlert(title: "Git sync complete", message: project.gitSyncSuccessMessage())
                 }
             } catch GitError.noAddedFiles {
                 DispatchQueue.main.async {
@@ -889,7 +883,7 @@ class NotesTableView: UITableView,
                 DispatchQueue.main.async {
                     project.gitStatus = error.localizedDescription
 
-                    let message = self.gitErrorMessage(error: error, project: project)
+                    let message = project.gitSyncErrorMessage(error)
                     self.presentGitAlert(title: "Git commit/push failed", message: message)
                 }
 
@@ -914,28 +908,6 @@ class NotesTableView: UITableView,
         }
 
         UIApplication.getVC().present(alert, animated: true, completion: nil)
-    }
-
-    private func gitErrorMessage(error: Error, project: Project) -> String {
-        let details = error.localizedDescription
-
-        if details.lowercased().contains("repository") && details.lowercased().contains("not") {
-            return "Git repository is missing for this vault. Open Git settings and run Init/clone first.\n\n\(details)"
-        }
-
-        if !project.isGitOriginExist() {
-            return "Git origin is empty. Please set repository URL first."
-        }
-
-        if details.contains("Operation not permitted") || details.contains("Unable to checkout to tree") {
-            return "Folder permission is missing. Re-pick this folder in Git setup, then retry.\n\n\(details)"
-        }
-
-        if details.lowercased().contains("auth") || details.lowercased().contains("oauth") {
-            return "GitHub authorization is required or expired. Open Git settings and re-authorize.\n\n\(details)"
-        }
-
-        return details
     }
 
     private func historyAction(note: Note) {

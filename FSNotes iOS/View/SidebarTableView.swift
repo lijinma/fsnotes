@@ -331,7 +331,7 @@ class SidebarTableView: UITableView,
     }
 
     public func getSidebarProjects() -> [Project]? {
-        guard let indexPaths = UIApplication.getVC().sidebarTableView?.indexPathsForSelectedRows else { return nil }
+        let indexPaths = UIApplication.getVC().sidebarTableView?.indexPathsForSelectedRows ?? []
 
         var projects = [Project]()
         for indexPath in indexPaths {
@@ -345,8 +345,8 @@ class SidebarTableView: UITableView,
             return projects
         }
 
-        if let root = Storage.shared().getDefault() {
-            return [root]
+        if let vault = Storage.shared().getSidebarProjects().first {
+            return [vault]
         }
 
         return nil

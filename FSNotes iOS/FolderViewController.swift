@@ -252,47 +252,19 @@ class FolderViewController: UIViewController, UITableViewDataSource, UITableView
             do {
                 try gitProject.saveRevision()
                 DispatchQueue.main.async {
-                    let message: String
-                    if gitProject.getGitOrigin() != nil {
-                        message = "Add, commit, and push completed."
-                    } else {
-                        message = "Commit completed (no remote origin configured)."
-                    }
-                    let alert = UIAlertController(title: "Git sync complete", message: message, preferredStyle: .alert)
+                    let alert = UIAlertController(title: "Git sync complete", message: gitProject.gitSyncSuccessMessage(), preferredStyle: .alert)
                     alert.addAction(UIAlertAction(title: "OK", style: .default))
                     self.present(alert, animated: true)
                 }
             } catch {
                 DispatchQueue.main.async {
-                    let message = self.gitErrorMessage(error: error, project: gitProject)
+                    let message = gitProject.gitSyncErrorMessage(error)
                     let alert = UIAlertController(title: "git error", message: message, preferredStyle: .alert)
                     alert.addAction(UIAlertAction(title: "OK", style: .cancel))
                     self.present(alert, animated: true)
                 }
             }
         }
-    }
-
-    private func gitErrorMessage(error: Error, project: Project) -> String {
-        let details = error.localizedDescription
-
-        if details.lowercased().contains("repository") && details.lowercased().contains("not") {
-            return "Git repository is missing for this vault. Open Git settings and run Init/clone first.\n\n\(details)"
-        }
-
-        if !project.isGitOriginExist() {
-            return "Git origin is empty. Please set repository URL first."
-        }
-
-        if details.contains("Operation not permitted") || details.contains("Unable to checkout to tree") {
-            return "Folder permission is missing. Re-pick this folder in Git setup, then retry.\n\n\(details)"
-        }
-
-        if details.lowercased().contains("auth") || details.lowercased().contains("oauth") {
-            return "GitHub authorization is required or expired. Open Git settings and re-authorize.\n\n\(details)"
-        }
-
-        return details
     }
 
     private func updateNoteCount() {

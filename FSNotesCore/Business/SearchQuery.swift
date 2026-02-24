@@ -40,12 +40,20 @@ class SearchQuery {
     }
 
     public func isFit(note: Note) -> Bool {
+        let vaultRoots = Storage.shared().getSidebarProjects().filter({ $0.isBookmark })
+        let belongsToVault = vaultRoots.contains(where: { root in
+            let rootPath = root.url.path
+            let notePath = note.project.url.path
+
+            return notePath == rootPath || notePath.hasPrefix(rootPath + "/")
+        })
+
         return !note.name.isEmpty
             && (
                 self.filter.isEmpty
                 || self.terms != nil && self.isMatched(note: note, terms: self.terms!)
             ) && (
-                self.type == .All && note.project.isVisibleInCommon()
+                self.type == .All && !vaultRoots.isEmpty && belongsToVault && note.project.isVisibleInCommon()
                 || self.type == .Inbox && note.project.isDefault
                 || self.type == .Trash
                 || self.type == .Untagged && note.tags.count == 0

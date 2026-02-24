@@ -493,6 +493,36 @@ extension Project {
         return getGitOrigin() != nil
     }
 
+    public func gitSyncSuccessMessage() -> String {
+        if getGitOrigin() != nil {
+            return "Add, commit, and push completed."
+        }
+
+        return "Commit completed (no remote origin configured)."
+    }
+
+    public func gitSyncErrorMessage(_ error: Error) -> String {
+        let details = error.localizedDescription
+
+        if details.lowercased().contains("repository") && details.lowercased().contains("not") {
+            return "Git repository is missing for this vault. Open Git settings and run Init/clone first.\n\n\(details)"
+        }
+
+        if !isGitOriginExist() {
+            return "Git origin is empty. Please set repository URL first."
+        }
+
+        if details.contains("Operation not permitted") || details.contains("Unable to checkout to tree") {
+            return "Folder permission is missing. Re-pick this folder in Git setup, then retry.\n\n\(details)"
+        }
+
+        if details.lowercased().contains("auth") || details.lowercased().contains("oauth") {
+            return "GitHub authorization is required or expired. Open Git settings and re-authorize.\n\n\(details)"
+        }
+
+        return details
+    }
+
     private func readOriginFromDotGitConfig() -> String? {
         let dotGitURL = url.appendingPathComponent(".git")
         var configURL: URL?

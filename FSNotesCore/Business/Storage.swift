@@ -254,8 +254,8 @@ class Storage {
     }
     
     public func getSidebarProjects() -> [Project] {
-        return projects
-            .filter({ $0.isBookmark || $0.parent?.isDefault == true })
+        let bookmarks = projects.filter({ $0.isBookmark })
+        return bookmarks
             .sorted(by: { $0.label.lowercased() < $1.label.lowercased() })
             .sorted(by: { $0.settings.priority < $1.settings.priority })
     }
@@ -280,6 +280,10 @@ class Storage {
             
             return nil
         }
+
+        if bookmark {
+            enforceSingleBookmarkVault(selectedURL: url)
+        }
         
         let project = Project(storage: self, url: url, isBookmark: bookmark)
         var insert = [project]
@@ -296,6 +300,20 @@ class Storage {
         }
         
         return insert
+    }
+
+    private func enforceSingleBookmarkVault(selectedURL: URL) {
+        let bookmarkRoots = projects.filter { $0.isBookmark && $0.url != selectedURL }
+        guard !bookmarkRoots.isEmpty else { return }
+
+        for root in bookmarkRoots {
+            let toDelete = [root] + root.getChildProjectsByURL()
+            for project in toDelete {
+                removeBy(project: project)
+            }
+
+            SandboxBookmark.sharedInstance().remove(url: root.url)
+        }
     }
 
     private func assignTrash(by url: URL) {
@@ -361,19 +379,17 @@ class Storage {
 
     public func assignBookmarks() {
         let bookmarksManager = SandboxBookmark.sharedInstance()
-        let bookmarks = bookmarksManager.getRestoredUrls()
-        
-        for url in bookmarks {
-            if url.pathExtension == "css" 
-                || projectExist(url: url)
-                || UserDefaultsManagement.gitStorage == url {
-                continue
-            }
-            
+        let bookmarks = bookmarksManager.getRestoredUrls().sorted(by: { $0.path < $1.path })
+        guard let url = bookmarks.first else { return }
 
-            let project = Project(storage: self, url: url, isBookmark: true)
-            insertProject(project: project)
+        if url.pathExtension == "css"
+            || projectExist(url: url)
+            || UserDefaultsManagement.gitStorage == url {
+            return
         }
+
+        let project = Project(storage: self, url: url, isBookmark: true)
+        insertProject(project: project)
     }
     
     func getTrash(url: URL) -> URL? {
@@ -1086,20 +1102,11 @@ class Storage {
     }
 
     public func loadNonSystemProject() {
-        guard let main = getDefault() else { return }
-        
-        let projectURLs = getAllSubUrls(for: main.url)
-        for projectURL in projectURLs {
-            let project = Project(storage: self, url: projectURL)
-            insertProject(project: project)
-        }
-        
+        // Single-vault mode: only load directories from the selected bookmark vault.
         let bookmarkURLs = fetchBookmarkUrls()
         for url in bookmarkURLs {
-            if !projectURLs.contains(url) {
-                let project = Project(storage: self, url: url)
-                insertProject(project: project)
-            }
+            let project = Project(storage: self, url: url)
+            insertProject(project: project)
         }
     }
     
@@ -1358,19 +1365,17 @@ class Storage {
     }
 
     public func hasOrigins() -> Bool {
-        return projects.first(where: {
-            return (
-                $0.settings.gitOrigin != nil && $0.settings.gitOrigin!.count > 0
-            )
-        }) != nil
+        return !(getGitProjects() ?? []).isEmpty
     }
 
     public func getGitProjects() -> [Project]? {
-        return projects.filter({
-            return (
-                $0.settings.gitOrigin != nil && $0.settings.gitOrigin!.count > 0
-            )
-        })
+        let gitProjects = projects.filter {
+            $0.isBookmark
+            && $0.settings.gitOrigin != nil
+            && !$0.settings.gitOrigin!.isEmpty
+        }
+
+        return gitProjects.isEmpty ? nil : gitProjects
     }
 
     public func loadProjectRelations() {

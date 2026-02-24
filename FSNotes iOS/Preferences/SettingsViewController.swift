@@ -29,8 +29,7 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
             NSLocalizedString("Advanced", comment: "Settings"),
         ], [
             NSLocalizedString("iCloud Drive", comment: "Settings"),
-            NSLocalizedString("Add External Folder", comment: "Settings"),
-            NSLocalizedString("Folders", comment: "Settings"),
+            NSLocalizedString("Choose Vault Folder", comment: "Settings"),
             NSLocalizedString("Import Notes", comment: "Settings")
         ], [
             NSLocalizedString("Support", comment: "Settings"),
@@ -51,7 +50,6 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
         ], [
             "cloud.fill",
             "externaldrive.fill.badge.plus",
-            "folder.fill.badge.gearshape",
             "square.and.arrow.down.fill"
         ], [
             "graduationcap.fill",
@@ -84,7 +82,7 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
         ]
     ]
 
-    var rowsInSection = [6, 4, 4]
+    var rowsInSection = [6, 3, 4]
 
     override func viewWillAppear(_ animated: Bool) {
         navigationController?.navigationBar.prefersLargeTitles = true
@@ -138,7 +136,7 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
         
         var cell = SettingsTableViewCell(iconName: iconName, gradient: gradient, style: .default, reuseIdentifier: iconName)
         
-        if indexPath.section == 0x01 && indexPath.row == 0x03 {
+        if indexPath.section == 0x01 && indexPath.row == 0x02 {
             cell = SettingsTableViewCell(iconName: iconName, gradient: gradient, style: .subtitle, reuseIdentifier: iconName)
         }
 
@@ -161,8 +159,6 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
             case 1:
                 cell.accessoryType = .none
             case 2:
-                cell.accessoryType = .disclosureIndicator
-            case 3:
                 cell.detailTextLabel?.textColor = UIColor.blackWhite
                 cell.detailTextLabel?.numberOfLines = 0
                 cell.detailTextLabel?.lineBreakMode = .byWordWrapping
@@ -204,8 +200,8 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
             case 2:
                 lvc = SecurityViewController()
             case 3:
-                guard let project = resolveGitProject() else { return }
-                lvc = AppDelegate.getGitVC(for: project)
+                openGitSettingsFromSettings()
+                return
             case 4:
                 lvc = AppIconViewController()
             case 5:
@@ -227,9 +223,6 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
                 }
                 break
             case 2:
-                lvc = ProjectsViewController()
-                break
-            case 3:
                 var picker: UIDocumentPickerViewController
 
                 if #available(iOS 14.0, *) {
@@ -283,7 +276,12 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
             return selectedProject.getGitProject() ?? selectedProject
         }
 
-        return Storage.shared().getDefault()
+        return nil
+    }
+
+    private func openGitSettingsFromSettings() {
+        let selected = resolveGitProject()
+        UIApplication.getVC().presentGitVaultSetup(selectedProject: selected, requiredSelection: false)
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {

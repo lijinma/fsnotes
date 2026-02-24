@@ -313,13 +313,7 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
                 }
             } else {
                 DispatchQueue.main.async {
-                    let message: String
-                    if project.getGitOrigin() != nil {
-                        message = "Add, commit, and push completed."
-                    } else {
-                        message = "Commit completed (no remote origin configured)."
-                    }
-                    self.successAlert(title: "Git sync complete", message: message)
+                    self.successAlert(title: "Git sync complete", message: project.gitSyncSuccessMessage())
                 }
             }
         })
