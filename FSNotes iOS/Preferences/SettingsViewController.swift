@@ -204,7 +204,7 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
             case 2:
                 lvc = SecurityViewController()
             case 3:
-                guard let project = Storage.shared().getDefault() else { return }
+                guard let project = resolveGitProject() else { return }
                 lvc = AppDelegate.getGitVC(for: project)
             case 4:
                 lvc = AppIconViewController()
@@ -274,6 +274,16 @@ class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
         if let controller = lvc {
             self.navigationController?.pushViewController(controller, animated: true)
         }
+    }
+
+    private func resolveGitProject() -> Project? {
+        if let selectedProject = UIApplication.getVC().sidebarTableView.getSelectedSidebarItem()?.project,
+           !selectedProject.isVirtual,
+           !selectedProject.isTrash {
+            return selectedProject.getGitProject() ?? selectedProject
+        }
+
+        return Storage.shared().getDefault()
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {

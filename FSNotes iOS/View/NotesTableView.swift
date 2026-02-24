@@ -293,6 +293,8 @@ class NotesTableView: UITableView,
                 self.moveAction(notes: [note])
             case "commit":
                 self.saveRevisionAction(note: note)
+            case "gitSync":
+                self.saveRevisionAction(note: note)
             case "history":
                 self.historyAction(note: note)
             case "rename":
@@ -353,6 +355,11 @@ class NotesTableView: UITableView,
         let moveImage = UIImage(systemName: "move.3d")
         actions.append(UIAction(title: moveTitle, image: moveImage, identifier: UIAction.Identifier("move"), handler: handler))
 
+        if !note.isEncrypted() {
+            let syncTitle = NSLocalizedString("Git Add/commit/push", comment: "Main view popover table")
+            let syncImage = UIImage(systemName: "arrow.triangle.2.circlepath")
+            actions.append(UIAction(title: syncTitle, image: syncImage, identifier: UIAction.Identifier("gitSync"), handler: handler))
+        }
 
         if note.hasGitRepository() && !note.isEncrypted() {
             let commitTitle = NSLocalizedString("Save Revision", comment: "")
@@ -852,69 +859,83 @@ class NotesTableView: UITableView,
         var current: Project?
 
         if let unwrappedProject = project {
-            current = unwrappedProject
+            current = unwrappedProject.getGitProject() ?? unwrappedProject
         } else if let note = note {
             current = note.getGitProject()
         }
 
         guard let project = current else { return }
-        guard let nvc = UIApplication.getNC() else { return }
-
-        let viewController = UIApplication.getVC()
-
-        // Show loader
-        let title = NSLocalizedString("Loading...", comment: "")
-        let alert = UIAlertController(title: nil, message: title, preferredStyle: .alert)
-
-        let loadingIndicator = UIActivityIndicatorView(frame: CGRect(x: 10, y: 5, width: 50, height: 50))
-        loadingIndicator.hidesWhenStopped = true
-        loadingIndicator.style = UIActivityIndicatorView.Style.medium
-        loadingIndicator.startAnimating();
-
-        alert.view.addSubview(loadingIndicator)
-        nvc.present(alert, animated: true)
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try project.saveRevision()
-
-                // Hide loader
                 DispatchQueue.main.async {
-                    nvc.dismiss(animated: false, completion: nil)
+                    let message: String
+                    if project.getGitOrigin() != nil {
+                        message = "Add, commit, and push completed."
+                    } else {
+                        message = "Commit completed (no remote origin configured)."
+                    }
+                    self.presentGitAlert(title: "Git sync complete", message: message)
                 }
             } catch GitError.noAddedFiles {
                 DispatchQueue.main.async {
-                    // Hide loader
-                    nvc.dismiss(animated: false, completion: nil)
-
-                    let alert = UIAlertController(title: "No changes", message: "Nothing new to commit", preferredStyle: UIAlertController.Style.alert)
-                    alert.addAction(UIAlertAction(title: "OK", style: UIAlertAction.Style.default, handler: nil))
-
-                    nvc.present(alert, animated: true, completion: nil)
+                    self.presentGitAlert(
+                        title: "No changes",
+                        message: "Nothing new to commit"
+                    )
                 }
             } catch {
                 DispatchQueue.main.async {
-                    // Hide loader
-                    nvc.dismiss(animated: false, completion: nil)
-
                     project.gitStatus = error.localizedDescription
 
-                    let alert = UIAlertController(title: "Git error", message: error.localizedDescription, preferredStyle: UIAlertController.Style.alert)
-                    alert.addAction(UIAlertAction(title: "OK", style: UIAlertAction.Style.default, handler: nil))
-
-                    nvc.present(alert, animated: true, completion: nil)
+                    let message = self.gitErrorMessage(error: error, project: project)
+                    self.presentGitAlert(title: "Git commit/push failed", message: message)
                 }
 
                 return
             }
-
-            if project.isGitOriginExist() {
-                viewController.gitQueue.addOperation({
-                    try? project.pull()
-                    try? project.push()
-                })
-            }
         }
+    }
+
+    private func presentGitAlert(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
+
+        if let presenter = UIApplication.getNC() {
+            if presenter.presentedViewController == nil {
+                presenter.present(alert, animated: true, completion: nil)
+            } else {
+                presenter.dismiss(animated: false) {
+                    presenter.present(alert, animated: true, completion: nil)
+                }
+            }
+            return
+        }
+
+        UIApplication.getVC().present(alert, animated: true, completion: nil)
+    }
+
+    private func gitErrorMessage(error: Error, project: Project) -> String {
+        let details = error.localizedDescription
+
+        if details.lowercased().contains("repository") && details.lowercased().contains("not") {
+            return "Git repository is missing for this vault. Open Git settings and run Init/clone first.\n\n\(details)"
+        }
+
+        if !project.isGitOriginExist() {
+            return "Git origin is empty. Please set repository URL first."
+        }
+
+        if details.contains("Operation not permitted") || details.contains("Unable to checkout to tree") {
+            return "Folder permission is missing. Re-pick this folder in Git setup, then retry.\n\n\(details)"
+        }
+
+        if details.lowercased().contains("auth") || details.lowercased().contains("oauth") {
+            return "GitHub authorization is required or expired. Open Git settings and re-authorize.\n\n\(details)"
+        }
+
+        return details
     }
 
     private func historyAction(note: Note) {

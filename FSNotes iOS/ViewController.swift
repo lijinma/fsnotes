@@ -28,6 +28,7 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
 
     private var newsPopup: MPreviewView?
     private var newsOverlay: UIView?
+    private var didPresentGitOnboarding = false
 
     public var indicator: UIActivityIndicatorView?
 
@@ -127,6 +128,7 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
         super.viewDidAppear(animated)
 
         configureSearchController()
+        showGitVaultOnboardingIfNeeded()
     }
 
     override func viewDidLoad() {
@@ -608,6 +610,10 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
     }
 
     private func loadNews() {
+        if !hasGitVaults() {
+            return
+        }
+
         guard storage.isReadedNewsOutdated(),
               let newsURL = storage.getNews(),
               let defaultProject = storage.getDefault() else { return }
@@ -968,6 +974,23 @@ class ViewController: UIViewController, UISearchBarDelegate, UIGestureRecognizer
 
     public func getSearchBar() -> UISearchBar? {
         return navigationItem.searchController?.searchBar 
+    }
+
+    private func hasGitVaults() -> Bool {
+        let vaults = storage
+            .getSidebarProjects()
+            .filter { !$0.isVirtual && !$0.isTrash && ($0.isBookmark || $0.parent?.isDefault == true) }
+        return !vaults.isEmpty
+    }
+
+    public func showGitVaultOnboardingIfNeeded() {
+        guard !didPresentGitOnboarding else { return }
+        guard !hasGitVaults() else { return }
+        guard presentedViewController == nil else { return }
+
+        didPresentGitOnboarding = true
+        closeNews()
+        presentGitVaultSetup(selectedProject: nil, requiredSelection: true)
     }
 
     @objc func newButtonAction() {

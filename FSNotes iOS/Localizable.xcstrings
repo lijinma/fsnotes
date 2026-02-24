@@ -4674,6 +4674,9 @@
         }
       }
     },
+    "Git Sync (Add/commit/push)" : {
+
+    },
     "History" : {
       "localizations" : {
         "cs" : {

@@ -160,4 +160,13 @@ public class Remote {
             throw gitUnknownError("Unable to push to remote", code: error)
         }
     }
+
+    public func urlString() -> String? {
+        guard let remote = pointer.pointee,
+              let remoteURL = git_remote_url(remote) else {
+            return nil
+        }
+
+        return String(cString: remoteURL)
+    }
 }

@@ -108,10 +108,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     // MARK: - Static Helper Methods
 
     public static func getGitVC(for project: Project) -> GitViewController {
-        if let gitVC = AppDelegate.gitVC[project.settingsKey] {
-            return gitVC
-        }
-
         let storyBoard: UIStoryboard = UIStoryboard(name: "Main", bundle:nil)
         let gvc = storyBoard.instantiateViewController(withIdentifier: "gitSettingsViewController") as! GitViewController
         gvc.setProject(project)

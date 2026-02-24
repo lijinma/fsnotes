@@ -39,8 +39,11 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
     private var project: Project?
     private var pendingPKCE: OAuthPKCEContext?
     private var initialOriginToApply: String?
-    private var shouldAutoRunAfterInitialOrigin: Bool = false
+    private var shouldStartGitHubImportFlow: Bool = false
+    private var pendingCloneAfterOAuth: Bool = false
     private var didHandleInitialOrigin: Bool = false
+    private var didRunDiagnostics: Bool = false
+    private var debugStatusMessage: String = "debug: waiting"
 
     public var activity: UIActivityIndicatorView?
     public var leftButton: UIButton?
@@ -48,12 +51,14 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
     public var logTextField: UITextField?
 
     public func setProject(_ project: Project) {
-        self.project = project.getParent()
+        self.project = project.getGitProject() ?? project
+        _ = self.project?.syncGitOriginFromLocalRepository()
     }
 
-    public func configureInitialGitOrigin(_ origin: String, autoRun: Bool) {
+    public func configureInitialGitOrigin(_ origin: String, startGitHubImport: Bool = false) {
         initialOriginToApply = origin
-        shouldAutoRunAfterInitialOrigin = autoRun
+        shouldStartGitHubImportFlow = startGitHubImport
+        pendingCloneAfterOAuth = false
         didHandleInitialOrigin = false
     }
 
@@ -73,11 +78,19 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
 
     override func viewWillAppear(_ animated: Bool) {
         UIApplication.shared.isIdleTimerDisabled = true
+        didRunDiagnostics = false
 
         DispatchQueue.main.async {
+            if self.project == nil {
+                self.setDebugStatus("debug: project=nil in viewWillAppear")
+            } else {
+                _ = self.project?.syncGitOriginFromLocalRepository()
+            }
             self.updateButtons(isActive: self.hasActiveGit)
             if let status = self.project?.gitStatus {
                 self.logTextField?.text = status
+            } else {
+                self.logTextField?.text = self.debugStatusMessage
             }
             self.tableView.reloadData()
         }
@@ -85,6 +98,7 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        runDiagnosticsIfNeeded()
         applyInitialOriginIfNeeded()
     }
 
@@ -193,6 +207,7 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
             if indexPath.section == GitSection.logs.rawValue && indexPath.row == 0 {
                 textField.placeholder = "no data"
                 textField.isEnabled = false
+                textField.text = project.gitStatus ?? debugStatusMessage
 
                 logTextField = textField
                 progress = GitProgress(statusTextField: textField, project: project)
@@ -247,6 +262,7 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
         guard let project = project, let origin = sender.text else { return }
 
         project.settings.setOrigin(origin)
+        UserDefaultsManagement.gitOrigin = origin.isEmpty ? nil : origin
         project.saveSettings()
         updateButtons()
     }
@@ -295,6 +311,16 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
                         UIApplication.getVC().checkNew()
                     }
                 }
+            } else {
+                DispatchQueue.main.async {
+                    let message: String
+                    if project.getGitOrigin() != nil {
+                        message = "Add, commit, and push completed."
+                    } else {
+                        message = "Commit completed (no remote origin configured)."
+                    }
+                    self.successAlert(title: "Git sync complete", message: message)
+                }
             }
         })
     }
@@ -308,23 +334,29 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
 
         if project.settings.gitOrigin != initialOrigin {
             project.settings.setOrigin(initialOrigin)
+            UserDefaultsManagement.gitOrigin = initialOrigin
             project.saveSettings()
         }
 
         tableView.reloadData()
         updateButtons()
 
-        if shouldAutoRunAfterInitialOrigin {
+        if shouldStartGitHubImportFlow {
+            shouldStartGitHubImportFlow = false
+
             if requiresRemoteAuth(project: project) && !isOAuthAuthorized(project: project) {
-                progress?.log(message: "Authorize GitHub OAuth, then tap Clone/push")
+                pendingCloneAfterOAuth = true
+                progress?.log(message: "Authorizing GitHub before clone...")
+                authorizeWithPKCE()
                 return
             }
+
             runRepositoryAction()
         }
     }
 
     private func requiresRemoteAuth(project: Project) -> Bool {
-        guard let origin = project.settings.gitOrigin?.lowercased(), !origin.isEmpty else {
+        guard let origin = project.getGitOrigin()?.lowercased(), !origin.isEmpty else {
             return false
         }
 
@@ -342,6 +374,7 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
         guard isOAuthAuthorized(project: project) else { return }
 
         project.clearGitOAuthToken()
+        pendingCloneAfterOAuth = false
 
         progress?.log(message: "OAuth disconnected")
         tableView.reloadData()
@@ -455,6 +488,11 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
 
                     self.progress?.log(message: "GitHub OAuth connected")
                     self.tableView.reloadData()
+
+                    if self.pendingCloneAfterOAuth {
+                        self.pendingCloneAfterOAuth = false
+                        self.runRepositoryAction()
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -534,8 +572,28 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
 
             let okAction = UIAlertAction(title: "OK", style: .cancel) { (_) in }
             alertController.addAction(okAction)
+            if self.presentedViewController == nil {
+                self.present(alertController, animated: true, completion: nil)
+            } else {
+                self.dismiss(animated: false) {
+                    self.present(alertController, animated: true, completion: nil)
+                }
+            }
+        }
+    }
 
-            self.present(alertController, animated: true, completion: nil)
+    public func successAlert(title: String, message: String) {
+        DispatchQueue.main.async {
+            let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
+            alertController.addAction(UIAlertAction(title: "OK", style: .default))
+
+            if self.presentedViewController == nil {
+                self.present(alertController, animated: true, completion: nil)
+            } else {
+                self.dismiss(animated: false) {
+                    self.present(alertController, animated: true, completion: nil)
+                }
+            }
         }
     }
 
@@ -604,6 +662,39 @@ class GitViewController: UIViewController, UITableViewDelegate, UITableViewDataS
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    private func runDiagnosticsIfNeeded() {
+        guard !didRunDiagnostics else { return }
+        didRunDiagnostics = true
+
+        guard let project = project else {
+            setDebugStatus("debug: project=nil in runDiagnostics")
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            let summary = project.gitDiagnosticsSummary()
+            self.setDebugStatus(summary)
+
+            DispatchQueue.main.async {
+                if let progress = self.progress {
+                    progress.log(message: summary)
+                } else {
+                    self.logTextField?.text = summary
+                }
+                self.tableView.reloadData()
+            }
+        }
+    }
+
+    private func setDebugStatus(_ message: String) {
+        debugStatusMessage = message
+        project?.gitStatus = message
+        print("[GitDebug] \(message)")
+        DispatchQueue.main.async {
+            self.logTextField?.text = message
+        }
     }
 }
 

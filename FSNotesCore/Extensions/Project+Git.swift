@@ -40,7 +40,129 @@ extension Project {
             return origin
         }
 
+        if let globalOrigin = UserDefaultsManagement.gitOrigin, !globalOrigin.isEmpty {
+            settings.setOrigin(globalOrigin)
+            saveSettings()
+            return globalOrigin
+        }
+
+        if let inherited = inheritGitOriginFromParents(), !inherited.isEmpty {
+            settings.setOrigin(inherited)
+            UserDefaultsManagement.gitOrigin = inherited
+            saveSettings()
+            return inherited
+        }
+
+        _ = syncGitOriginFromLocalRepository()
+
+        if let origin = settings.gitOrigin, origin.count > 0 {
+            return origin
+        }
+
         return nil
+    }
+
+    private func inheritGitOriginFromParents() -> String? {
+        var current = parent
+
+        while let project = current {
+            if let origin = project.settings.gitOrigin, !origin.isEmpty {
+                return origin
+            }
+            current = project.parent
+        }
+
+        return nil
+    }
+
+    @discardableResult
+    public func syncGitOriginFromLocalRepository() -> Bool {
+        if let origin = settings.gitOrigin, !origin.isEmpty {
+            return true
+        }
+
+        if let repository = try? getRepository() {
+            if let remote = try? repository.remotes.get(remoteName: "origin"),
+               let localOrigin = remote.urlString(),
+               !localOrigin.isEmpty {
+                settings.setOrigin(localOrigin)
+                UserDefaultsManagement.gitOrigin = localOrigin
+                saveSettings()
+                return true
+            }
+
+            if let names = try? repository.remotes.remoteNames() {
+                for name in names {
+                    if let remote = try? repository.remotes.get(remoteName: name),
+                       let remoteURL = remote.urlString(),
+                       !remoteURL.isEmpty {
+                        settings.setOrigin(remoteURL)
+                        UserDefaultsManagement.gitOrigin = remoteURL
+                        saveSettings()
+                        return true
+                    }
+                }
+            }
+        }
+
+        if let localOrigin = readOriginFromDotGitConfig(), !localOrigin.isEmpty {
+            settings.setOrigin(localOrigin)
+            UserDefaultsManagement.gitOrigin = localOrigin
+            saveSettings()
+            return true
+        }
+
+        return false
+    }
+
+    public func gitDiagnosticsSummary() -> String {
+        var parts: [String] = []
+        let candidates = getRepositoryCandidates()
+        let existing = candidates.filter { fileExistsWithScope($0) }
+
+        parts.append("vault=\(label)")
+        parts.append("settingsKey=\(settingsKey.prefix(8))")
+        parts.append("repo=\(existing.isEmpty ? "missing" : "found")")
+        parts.append("candidates=\(candidates.map { $0.lastPathComponent }.joined(separator: ","))")
+        if let gitStorage = UserDefaultsManagement.gitStorage {
+            let storageRepos = (try? FileManager.default.contentsOfDirectory(at: gitStorage, includingPropertiesForKeys: nil))?
+                .filter { $0.lastPathComponent.hasSuffix(".git") }.count ?? 0
+            parts.append("gitStorageCount=\(storageRepos)")
+        }
+        parts.append("globalOrigin=\((UserDefaultsManagement.gitOrigin ?? "").isEmpty ? "empty" : "set")")
+
+        if let repoURL = existing.first {
+            parts.append("repoPath=\(repoURL.lastPathComponent)")
+        }
+
+        if let repository = try? getRepository() {
+            if let names = try? repository.remotes.remoteNames(), !names.isEmpty {
+                var remotes: [String] = []
+                for name in names {
+                    let url = (try? repository.remotes.get(remoteName: name).urlString()) ?? "-"
+                    remotes.append("\(name)=\(url)")
+                }
+                parts.append("remotes=\(remotes.joined(separator: ","))")
+            } else {
+                parts.append("remotes=none")
+            }
+        } else {
+            parts.append("openRepo=failed")
+        }
+
+        let hadOrigin = settings.gitOrigin
+        let didSync = syncGitOriginFromLocalRepository()
+        let origin = settings.gitOrigin ?? ""
+        parts.append("origin=\(origin.isEmpty ? "empty" : "set")")
+        if didSync && (hadOrigin ?? "") != origin {
+            parts.append("originSource=auto")
+        } else if let hadOrigin = hadOrigin, !hadOrigin.isEmpty {
+            parts.append("originSource=settings")
+        } else {
+            parts.append("originSource=none")
+        }
+
+        return parts.joined(separator: " | ")
     }
 
 #if os(OSX)
@@ -60,17 +182,21 @@ extension Project {
             return url.appendingPathComponent(".git")
         }
 
-        let key = settingsKey.md5.prefix(6)
-        let repoURL = UserDefaultsManagement.gitStorage!.appendingPathComponent(key + " - " + label + ".git")
+        let key = String(settingsKey.prefix(6))
+        let repoURL = UserDefaultsManagement.gitStorage!.appendingPathComponent(key + ".git")
 
         return repoURL
     }
 #endif
 
     public func hasRepository() -> Bool {
-        let url = getRepositoryUrl()
+        for candidate in getRepositoryCandidates() {
+            if fileExistsWithScope(candidate) {
+                return true
+            }
+        }
 
-        return FileManager.default.fileExists(atPath: url.path)
+        return false
     }
 
     public func getGitProject() -> Project? {
@@ -144,9 +270,28 @@ extension Project {
 
     public func getRepository() throws -> Repository {
         let repositoryManager = RepositoryManager()
-        let repoURL = getRepositoryUrl()
+        let candidates = getRepositoryCandidates()
 
-        return try repositoryManager.openRepository(at: repoURL)
+        var firstError: Error?
+        for candidate in candidates {
+            if !fileExistsWithScope(candidate) {
+                continue
+            }
+
+            do {
+                return try repositoryManager.openRepository(at: candidate)
+            } catch {
+                if firstError == nil {
+                    firstError = error
+                }
+            }
+        }
+
+        if let firstError = firstError {
+            throw firstError
+        }
+
+        return try repositoryManager.openRepository(at: getRepositoryUrl())
     }
 
     public func useSeparateRepo() -> Bool {
@@ -345,11 +490,172 @@ extension Project {
     }
 
     public func isGitOriginExist() -> Bool {
-        if let origin = settings.gitOrigin, origin.count > 0 {
-            return true
+        return getGitOrigin() != nil
+    }
+
+    private func readOriginFromDotGitConfig() -> String? {
+        let dotGitURL = url.appendingPathComponent(".git")
+        var configURL: URL?
+        var isDir = ObjCBool(false)
+
+        if fileExistsWithScope(dotGitURL, isDirectory: &isDir) {
+            if isDir.boolValue {
+                configURL = dotGitURL.appendingPathComponent("config")
+            } else if let gitRef = try? String(contentsOf: dotGitURL, encoding: .utf8) {
+                let prefix = "gitdir:"
+                if let line = gitRef.split(separator: "\n").first(where: { $0.lowercased().contains(prefix) }) {
+                    let raw = String(line)
+                    if let range = raw.range(of: ":", options: .literal) {
+                        let path = raw[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let gitDirURL: URL
+                        if path.hasPrefix("/") {
+                            gitDirURL = URL(fileURLWithPath: path)
+                        } else {
+                            gitDirURL = url.appendingPathComponent(path)
+                        }
+                        configURL = gitDirURL.appendingPathComponent("config")
+                    }
+                }
+            }
         }
 
-        return false
+        guard let cfg = configURL,
+              let text = try? String(contentsOf: cfg, encoding: .utf8) else { return nil }
+
+        return parseOriginURLFromGitConfig(text)
+    }
+
+    private func parseOriginURLFromGitConfig(_ text: String) -> String? {
+        var inOriginSection = false
+        var firstRemoteURL: String?
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                let lowered = trimmed.lowercased()
+                inOriginSection = lowered == "[remote \"origin\"]"
+                continue
+            }
+
+            if trimmed.lowercased().hasPrefix("url") {
+                let parts = trimmed.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: true)
+                if parts.count == 2 {
+                    let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !value.isEmpty {
+                        if inOriginSection {
+                            return value
+                        }
+                        if firstRemoteURL == nil {
+                            firstRemoteURL = value
+                        }
+                    }
+                }
+            }
+        }
+
+        return firstRemoteURL
+    }
+
+    private func fileExistsWithScope(_ target: URL, isDirectory: UnsafeMutablePointer<ObjCBool>? = nil) -> Bool {
+        #if os(iOS)
+        let started = url.startAccessingSecurityScopedResource()
+        defer {
+            if started {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        #endif
+        return FileManager.default.fileExists(atPath: target.path, isDirectory: isDirectory)
+    }
+
+    private func getRepositoryCandidates() -> [URL] {
+        var candidates: [URL] = []
+
+        let inlineRepo = url.appendingPathComponent(".git")
+        candidates.append(inlineRepo)
+
+        let primary = getRepositoryUrl()
+        if !candidates.contains(primary) {
+            candidates.append(primary)
+        }
+
+        #if os(iOS)
+        if UserDefaultsManagement.iCloudDrive,
+           let gitStorage = UserDefaultsManagement.gitStorage {
+            let stableKey = String(settingsKey.prefix(6))
+            let legacyHashKey = String(settingsKey.md5.prefix(6))
+            let keys = [stableKey, legacyHashKey]
+
+            for key in keys {
+                let byKey = gitStorage.appendingPathComponent("\(key).git")
+                if !candidates.contains(byKey) {
+                    candidates.append(byKey)
+                }
+
+                let byLabel = gitStorage.appendingPathComponent("\(key) - \(label).git")
+                if !candidates.contains(byLabel) {
+                    candidates.append(byLabel)
+                }
+            }
+
+            if let entries = try? FileManager.default.contentsOfDirectory(at: gitStorage, includingPropertiesForKeys: nil) {
+                let matchedByKey = entries.filter {
+                    let name = $0.lastPathComponent
+                    guard name.hasSuffix(".git") else { return false }
+                    return keys.contains(where: { name.hasPrefix("\($0).") || name.hasPrefix("\($0) - ") })
+                }
+                for item in matchedByKey where !candidates.contains(item) {
+                    candidates.append(item)
+                }
+
+                // Fallback: recover repo by matching core.worktree to current vault path.
+                for repoURL in entries where repoURL.lastPathComponent.hasSuffix(".git") {
+                    guard let workTree = readWorkTreeFromRepositoryConfig(repoURL),
+                          pathEquivalent(workTree, url.path) else { continue }
+                    if !candidates.contains(repoURL) {
+                        candidates.append(repoURL)
+                    }
+                }
+            }
+        }
+        #endif
+
+        return candidates
+    }
+
+    private func readWorkTreeFromRepositoryConfig(_ repoURL: URL) -> String? {
+        let configURL = repoURL.appendingPathComponent("config")
+        guard let text = try? String(contentsOf: configURL, encoding: .utf8) else { return nil }
+
+        var inCore = false
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                inCore = trimmed.lowercased() == "[core]"
+                continue
+            }
+
+            guard inCore, trimmed.lowercased().hasPrefix("worktree") else { continue }
+            let parts = trimmed.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { continue }
+
+            let rawPath = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if rawPath.hasPrefix("/") {
+                return URL(fileURLWithPath: rawPath).standardized.path
+            }
+
+            return repoURL.deletingLastPathComponent().appendingPathComponent(rawPath).standardized.path
+        }
+
+        return nil
+    }
+
+    private func pathEquivalent(_ lhs: String, _ rhs: String) -> Bool {
+        let a = lhs.replacingOccurrences(of: "/private/", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let b = rhs.replacingOccurrences(of: "/private/", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return a == b
     }
 
     public func getGitOAuthToken() -> String? {
@@ -471,14 +777,16 @@ extension Project {
     }
 
     public func getRepositoryState() -> RepositoryAction {
+        let hasOrigin = getGitOrigin() != nil
+
         if hasRepository() {
-            if settings.gitOrigin != nil {
+            if hasOrigin {
                 return .pullPush
             } else {
                 return .commit
             }
         } else {
-            if settings.gitOrigin != nil {
+            if hasOrigin {
                 return .clonePush
             } else {
                 return .initCommit
@@ -501,6 +809,12 @@ extension Project {
                 try commit(message: nil, progress: progress)
             case .pullPush:
                 do {
+                    do {
+                        try commit(message: nil, progress: progress)
+                    } catch GitError.noAddedFiles {
+                        progress?.log(message: "git add: no new data")
+                    }
+
                     try pull(progress: progress)
                     try push(progress: progress)
                 } catch GitError.notFound(let ref) {

@@ -105,6 +105,7 @@ class FolderViewController: UIViewController, UITableViewDataSource, UITableView
         title = project.label
         navigationItem.largeTitleDisplayMode = .automatic
         navigationController?.navigationBar.prefersLargeTitles = true
+        configureNavMenu()
 
         view.backgroundColor = .systemBackground
 
@@ -134,6 +135,7 @@ class FolderViewController: UIViewController, UITableViewDataSource, UITableView
         super.viewWillAppear(animated)
         navigationController?.navigationBar.prefersLargeTitles = true
         navigationController?.setToolbarHidden(false, animated: true)
+        configureNavMenu()
         loadData()
         tableView.reloadData()
         updateNoteCount()
@@ -203,6 +205,94 @@ class FolderViewController: UIViewController, UITableViewDataSource, UITableView
         let composeButton = UIBarButtonItem(barButtonSystemItem: .compose, target: self, action: #selector(newNoteAction))
 
         toolbarItems = [flexLeft, noteCountItem, flexRight, composeButton]
+    }
+
+    private func configureNavMenu() {
+        let syncTitle = NSLocalizedString("Git Sync (Add/commit/push)", comment: "")
+        let syncAction = UIAction(title: syncTitle, image: UIImage(systemName: "arrow.triangle.2.circlepath")) { [weak self] _ in
+            self?.syncGit()
+        }
+
+        let settingsTitle = NSLocalizedString("Git Settings", comment: "")
+        let settingsAction = UIAction(title: settingsTitle, image: UIImage(named: "gitSettings")) { [weak self] _ in
+            self?.openGitSettings()
+        }
+
+        let menu = UIMenu(title: "", children: [syncAction, settingsAction])
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "ellipsis.circle"),
+            style: .plain,
+            target: nil,
+            action: nil
+        )
+        navigationItem.rightBarButtonItem?.menu = menu
+    }
+
+    private func openGitSettings() {
+        let selected = project.getGitProject() ?? project
+        let projectController = AppDelegate.getGitVC(for: selected)
+        projectController.setProject(selected)
+
+        let controller = UINavigationController(rootViewController: projectController)
+        present(controller, animated: true, completion: nil)
+    }
+
+    private func syncGit() {
+        let gitProject = project.getGitProject() ?? project
+
+        UIApplication.shared.isIdleTimerDisabled = true
+        UIApplication.getVC().gitQueue.addOperation {
+            defer {
+                DispatchQueue.main.async {
+                    UIApplication.shared.isIdleTimerDisabled = false
+                    UIApplication.getVC().scheduledGitPull()
+                }
+            }
+
+            do {
+                try gitProject.saveRevision()
+                DispatchQueue.main.async {
+                    let message: String
+                    if gitProject.getGitOrigin() != nil {
+                        message = "Add, commit, and push completed."
+                    } else {
+                        message = "Commit completed (no remote origin configured)."
+                    }
+                    let alert = UIAlertController(title: "Git sync complete", message: message, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    self.present(alert, animated: true)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    let message = self.gitErrorMessage(error: error, project: gitProject)
+                    let alert = UIAlertController(title: "git error", message: message, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+                    self.present(alert, animated: true)
+                }
+            }
+        }
+    }
+
+    private func gitErrorMessage(error: Error, project: Project) -> String {
+        let details = error.localizedDescription
+
+        if details.lowercased().contains("repository") && details.lowercased().contains("not") {
+            return "Git repository is missing for this vault. Open Git settings and run Init/clone first.\n\n\(details)"
+        }
+
+        if !project.isGitOriginExist() {
+            return "Git origin is empty. Please set repository URL first."
+        }
+
+        if details.contains("Operation not permitted") || details.contains("Unable to checkout to tree") {
+            return "Folder permission is missing. Re-pick this folder in Git setup, then retry.\n\n\(details)"
+        }
+
+        if details.lowercased().contains("auth") || details.lowercased().contains("oauth") {
+            return "GitHub authorization is required or expired. Open Git settings and re-authorize.\n\n\(details)"
+        }
+
+        return details
     }
 
     private func updateNoteCount() {

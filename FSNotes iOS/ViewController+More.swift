@@ -8,8 +8,13 @@
 
 import Foundation
 import UIKit
+import UniformTypeIdentifiers
 
 extension ViewController: UIDocumentPickerDelegate {
+
+    func presentGitVaultSetup(selectedProject: Project?, requiredSelection: Bool = false) {
+        openGitSettings(selectedProject: selectedProject, requiredSelection: requiredSelection)
+    }
     
     func makeSidebarSettingsMenu(for sidebarItem: SidebarItem) -> UIMenu? {
         let project = sidebarItem.project
@@ -805,61 +810,54 @@ extension ViewController: UIDocumentPickerDelegate {
         }
     }
 
-    private func openGitSettings(selectedProject: Project?) {
+    private func openGitSettings(selectedProject: Project?, requiredSelection: Bool = false) {
         let vaults = Storage.shared()
             .getSidebarProjects()
             .filter { !$0.isVirtual && !$0.isTrash && ($0.isBookmark || $0.parent?.isDefault == true) }
             .sorted(by: { $0.label.lowercased() < $1.label.lowercased() })
 
-        guard !vaults.isEmpty else {
-            self.dismiss(animated: true) {
-                let alertController = UIAlertController(
-                    title: "No vault",
-                    message: "Please create or add a folder first",
-                    preferredStyle: .alert
-                )
-                alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
-                UIApplication.getVC().present(alertController, animated: true)
-            }
-            return
-        }
-
-        let preferredVault = selectedProject?.getParent()
+        let preferredVault = selectedProject
         let picker = GitVaultPickerViewController(
             vaults: vaults,
             preferredVault: preferredVault,
+            requiredSelection: requiredSelection,
             onSelect: { vault in
                 self.presentGitSettings(for: vault)
             },
-            onImportFromGitHub: { repositoryURL, vaultName in
-                self.importVaultFromGitHub(repositoryURL: repositoryURL, preferredName: vaultName)
+            onPickFolder: { url, repositoryURL in
+                self.openGitForFolder(url: url, repositoryURL: repositoryURL)
             }
         )
 
         let pickerNav = UINavigationController(rootViewController: picker)
+        picker.isModalInPresentation = requiredSelection
+        pickerNav.isModalInPresentation = requiredSelection
         self.dismiss(animated: true, completion: {
             UIApplication.getVC().present(pickerNav, animated: true, completion: nil)
         })
     }
 
-    private func presentGitSettings(for vault: Project, initialOrigin: String? = nil, autoRun: Bool = false) {
+    private func presentGitSettings(for vault: Project, initialOrigin: String? = nil, startGitHubImport: Bool = false) {
         let projectController = AppDelegate.getGitVC(for: vault)
         projectController.setProject(vault)
         if let initialOrigin = initialOrigin {
-            projectController.configureInitialGitOrigin(initialOrigin, autoRun: autoRun)
+            projectController.configureInitialGitOrigin(initialOrigin, startGitHubImport: startGitHubImport)
         }
         let controller = UINavigationController(rootViewController: projectController)
         UIApplication.getVC().present(controller, animated: true, completion: nil)
     }
 
-    private func importVaultFromGitHub(repositoryURL: String, preferredName: String?) {
-        let trimmedRepo = repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let repoURL = URL(string: trimmedRepo),
-              let scheme = repoURL.scheme?.lowercased(),
-              (scheme == "https" || scheme == "http") else {
+    private func openGitForFolder(url: URL, repositoryURL: String?) {
+        guard url.hasDirectoryPath else { return }
+        guard url.startAccessingSecurityScopedResource() else { return }
+
+        do {
+            let bookmarkData = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+            SandboxBookmark.sharedInstance().save(data: bookmarkData)
+        } catch {
             let alertController = UIAlertController(
-                title: "Invalid URL",
-                message: "Please enter a valid repository URL",
+                title: "Folder access failed",
+                message: error.localizedDescription,
                 preferredStyle: .alert
             )
             alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
@@ -867,42 +865,40 @@ extension ViewController: UIDocumentPickerDelegate {
             return
         }
 
-        guard let root = storage.getDefault() else { return }
+        var vaultProject = storage.getProjectBy(url: url)
+        if vaultProject == nil, let projects = storage.insert(url: url, bookmark: true), let created = projects.first {
+            vaultProject = created
+            storage.loadProjectRelations()
+            UIApplication.getVC().sidebarTableView.insertRows(projects: projects)
+            UIApplication.getVC().sidebarTableView.reloadData()
+            UIApplication.getVC().reloadNotesTable()
+        }
 
-        let derived = repoURL.deletingPathExtension().lastPathComponent
-        let rawName = preferredName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseName = (rawName?.isEmpty == false ? rawName! : derived)
-        let safeName = baseName.replacingOccurrences(of: "/", with: "-")
-        guard !safeName.isEmpty else { return }
+        storage.loadProjectRelations()
+        guard let vault = vaultProject else { return }
 
-        let vaultURL = root.url.appendingPathComponent(safeName, isDirectory: true)
-
-        if !FileManager.default.fileExists(atPath: vaultURL.path) {
-            do {
-                try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true, attributes: nil)
-            } catch {
+        if let repositoryURL = repositoryURL {
+            let trimmedRepo = repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let repoURL = URL(string: trimmedRepo),
+                  let scheme = repoURL.scheme?.lowercased(),
+                  (scheme == "https" || scheme == "http") else {
                 let alertController = UIAlertController(
-                    title: "Create vault failed",
-                    message: error.localizedDescription,
+                    title: "Invalid URL",
+                    message: "Please enter a valid repository URL",
                     preferredStyle: .alert
                 )
                 alertController.addAction(UIAlertAction(title: "OK", style: .cancel))
                 UIApplication.getVC().present(alertController, animated: true)
                 return
             }
+
+            vault.settings.setOrigin(trimmedRepo)
+            vault.saveSettings()
+            presentGitSettings(for: vault, initialOrigin: trimmedRepo, startGitHubImport: true)
+            return
         }
 
-        var vaultProject = storage.getProjectBy(url: vaultURL)
-        if vaultProject == nil, let projects = storage.insert(url: vaultURL), let created = projects.first {
-            vaultProject = created
-            UIApplication.getVC().sidebarTableView.insertRows(projects: projects)
-        }
-
-        guard let vault = vaultProject else { return }
-        vault.settings.setOrigin(trimmedRepo)
-        vault.saveSettings()
-
-        presentGitSettings(for: vault, initialOrigin: trimmedRepo, autoRun: true)
+        presentGitSettings(for: vault)
     }
 
     private func emptyBin() {
@@ -1047,22 +1043,26 @@ extension ViewController: UIDocumentPickerDelegate {
     }
 }
 
-private final class GitVaultPickerViewController: UITableViewController {
+private final class GitVaultPickerViewController: UITableViewController, UIDocumentPickerDelegate {
     private let vaults: [Project]
     private let preferredVault: Project?
+    private let requiredSelection: Bool
     private let onSelect: (Project) -> Void
-    private let onImportFromGitHub: (String, String?) -> Void
+    private let onPickFolder: (URL, String?) -> Void
+    private var pendingRepositoryURL: String?
 
     init(
         vaults: [Project],
         preferredVault: Project?,
+        requiredSelection: Bool,
         onSelect: @escaping (Project) -> Void,
-        onImportFromGitHub: @escaping (String, String?) -> Void
+        onPickFolder: @escaping (URL, String?) -> Void
     ) {
         self.vaults = vaults
         self.preferredVault = preferredVault
+        self.requiredSelection = requiredSelection
         self.onSelect = onSelect
-        self.onImportFromGitHub = onImportFromGitHub
+        self.onPickFolder = onPickFolder
         super.init(style: .insetGrouped)
     }
 
@@ -1075,11 +1075,13 @@ private final class GitVaultPickerViewController: UITableViewController {
         title = "Choose Vault"
         navigationItem.largeTitleDisplayMode = .never
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "VaultCell")
-        navigationItem.leftBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .cancel,
-            target: self,
-            action: #selector(close)
-        )
+        if !requiredSelection {
+            navigationItem.leftBarButtonItem = UIBarButtonItem(
+                barButtonSystemItem: .cancel,
+                target: self,
+                action: #selector(close)
+            )
+        }
     }
 
     @objc private func close() {
@@ -1088,7 +1090,7 @@ private final class GitVaultPickerViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if section == 0 {
-            return 1
+            return 2
         }
         return vaults.count
     }
@@ -1110,9 +1112,15 @@ private final class GitVaultPickerViewController: UITableViewController {
 
         if indexPath.section == 0 {
             var content = cell.defaultContentConfiguration()
-            content.text = "From GitHub"
-            content.secondaryText = "Create vault and clone repository"
-            content.image = UIImage(systemName: "arrow.down.doc")
+            if indexPath.row == 0 {
+                content.text = "Choose Folder"
+                content.secondaryText = "Select an existing folder as vault"
+                content.image = UIImage(systemName: "folder")
+            } else {
+                content.text = "From GitHub"
+                content.secondaryText = "Select folder, authorize, then clone"
+                content.image = UIImage(systemName: "arrow.down.doc")
+            }
             cell.contentConfiguration = content
             cell.accessoryType = .disclosureIndicator
             return cell
@@ -1133,9 +1141,15 @@ private final class GitVaultPickerViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
 
         if indexPath.section == 0 {
+            if indexPath.row == 0 {
+                pendingRepositoryURL = nil
+                openFolderPicker()
+                return
+            }
+
             let alertController = UIAlertController(
                 title: "From GitHub",
-                message: "Paste repository URL and set a vault name",
+                message: "Paste repository URL, then choose target folder",
                 preferredStyle: .alert
             )
             alertController.addTextField { textField in
@@ -1144,18 +1158,15 @@ private final class GitVaultPickerViewController: UITableViewController {
                 textField.autocapitalizationType = .none
                 textField.autocorrectionType = .no
             }
-            alertController.addTextField { textField in
-                textField.placeholder = "Vault name (optional)"
-                textField.text = nil
-            }
 
             alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel))
             alertController.addAction(UIAlertAction(title: "Continue", style: .default, handler: { _ in
                 let repo = alertController.textFields?[0].text ?? ""
-                let vaultName = alertController.textFields?[1].text
-                self.dismiss(animated: true) {
-                    self.onImportFromGitHub(repo, vaultName)
-                }
+                let trimmed = repo.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+
+                self.pendingRepositoryURL = trimmed
+                self.openFolderPicker()
             }))
 
             present(alertController, animated: true)
@@ -1168,5 +1179,30 @@ private final class GitVaultPickerViewController: UITableViewController {
         dismiss(animated: true) {
             self.onSelect(vault)
         }
+    }
+
+    private func openFolderPicker() {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first, url.hasDirectoryPath else { return }
+
+        let repositoryURL = pendingRepositoryURL
+        pendingRepositoryURL = nil
+
+        controller.dismiss(animated: true) {
+            self.dismiss(animated: true) {
+                self.onPickFolder(url, repositoryURL)
+            }
+        }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        pendingRepositoryURL = nil
+        controller.dismiss(animated: true, completion: nil)
     }
 }
